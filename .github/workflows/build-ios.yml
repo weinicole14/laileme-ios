@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'Laileme/**'
+      - 'project.yml'
 
 jobs:
   build:
@@ -21,80 +22,52 @@ jobs:
           sw_vers
           xcodebuild -version
 
-      - name: Create Package.swift
+      - name: Install XcodeGen
         run: |
-          cat > Package.swift << 'EOF'
-          // swift-tools-version: 5.9
-          import PackageDescription
-          let package = Package(
-              name: "Laileme",
-              platforms: [.iOS(.v17)],
-              dependencies: [],
-              targets: [
-                  .executableTarget(
-                      name: "Laileme",
-                      path: "Laileme",
-                      exclude: ["Info.plist"]
-                  )
-              ]
-          )
-          EOF
+          brew install xcodegen
 
-      - name: Build for iOS Simulator
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          echo "=== Generated ==="
+          ls -la Laileme.xcodeproj/
+
+      - name: Build .app for iOS Simulator
         run: |
           xcodebuild build \
+            -project Laileme.xcodeproj \
             -scheme Laileme \
             -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -configuration Debug \
             -derivedDataPath ./build \
-            -skipPackagePluginValidation \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tail -50
+            2>&1 | tail -80
 
           echo "=== Build products ==="
-          find ./build -name "*.app" -type d 2>/dev/null
-          find ./build -name "Laileme" -type f 2>/dev/null | head -5
+          find ./build -name "*.app" -type d
 
-      - name: Package build artifacts
+      - name: Package .app
         if: success()
         run: |
-          APP_PATH=$(find ./build -name "*.app" -type d | head -1)
+          APP_PATH=$(find ./build -name "Laileme.app" -type d | head -1)
           if [ -n "$APP_PATH" ]; then
-            echo "Found app: $APP_PATH"
-            mkdir -p artifacts
-            cp -R "$APP_PATH" artifacts/
-            cd artifacts && zip -r ../Laileme-Simulator.zip . && cd ..
+            echo "Found: $APP_PATH"
+            ls -la "$APP_PATH/"
+            mkdir -p output
+            cp -R "$APP_PATH" output/
+            cd output && zip -r ../Laileme-Simulator.zip Laileme.app && cd ..
             ls -lh Laileme-Simulator.zip
           else
-            echo "No .app found, packaging build dir..."
-            PROD_PATH=$(find ./build -path "*/Debug-iphonesimulator/*" -type d | head -1)
-            if [ -n "$PROD_PATH" ]; then
-              mkdir -p artifacts
-              cp -R "$PROD_PATH"/* artifacts/ 2>/dev/null || true
-              cd artifacts && zip -r ../Laileme-Build.zip . && cd ..
-              ls -lh Laileme-Build.zip
-            else
-              echo "No build products found"
-              find ./build -type f -name "Laileme*" | head -10
-            fi
+            echo "ERROR: No .app found"
+            find ./build -type d -name "Debug-*" | head -5
+            exit 1
           fi
 
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Laileme-iOS-Build
-          path: |
-            Laileme-Simulator.zip
-            Laileme-Build.zip
+          name: Laileme-iOS-App
+          path: Laileme-Simulator.zip
           retention-days: 30
-          if-no-files-found: warn
-
-      - name: Build summary
-        if: always()
-        run: |
-          echo "=== Build Summary ==="
-          echo "Status: ${{ job.status }}"
-          echo "Build products:"
-          find ./build -name "*.app" -type d 2>/dev/null || echo "No .app found"
-          du -sh ./build 2>/dev/null || true
