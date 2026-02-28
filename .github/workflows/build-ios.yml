@@ -20,57 +20,81 @@ jobs:
         run: |
           sw_vers
           xcodebuild -version
-          echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
-          xcrun simctl list devices available | head -20
 
-      - name: Create Xcode project
+      - name: Create Package.swift
         run: |
-          mkdir -p Laileme.xcodeproj
-          cat > Laileme.xcodeproj/project.pbxproj << 'PBXEOF'
-          // !$*UTF8*$!
-          {
-            archiveVersion = 1;
-            classes = {};
-            objectVersion = 56;
-            objects = {
-              00000001 = { isa = PBXGroup; children = (00000010); sourceTree = "<group>"; };
-              00000010 = { isa = PBXGroup; children = (); name = Laileme; path = Laileme; sourceTree = "<group>"; };
-              00000002 = { isa = PBXProject; buildConfigurationList = 00000003; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = 00000001; productRefGroup = 00000001; projectDirPath = ""; projectRoot = ""; targets = (); };
-              00000003 = { isa = XCConfigurationList; buildConfigurations = (00000004); defaultConfigurationIsVisible = 0; };
-              00000004 = { isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; }; name = Debug; };
-            };
-            rootObject = 00000002;
-          }
-          PBXEOF
+          cat > Package.swift << 'EOF'
+          // swift-tools-version: 5.9
+          import PackageDescription
+          let package = Package(
+              name: "Laileme",
+              platforms: [.iOS(.v17)],
+              dependencies: [],
+              targets: [
+                  .executableTarget(
+                      name: "Laileme",
+                      path: "Laileme",
+                      exclude: ["Info.plist"]
+                  )
+              ]
+          )
+          EOF
 
-      - name: Build for iOS Simulator via SPM
+      - name: Build for iOS Simulator
         run: |
-          xcodebuild \
+          xcodebuild build \
             -scheme Laileme \
             -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -derivedDataPath ./build \
             -skipPackagePluginValidation \
-            build 2>&1 || true
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tail -50
 
-      - name: Build with swiftc directly
+          echo "=== Build products ==="
+          find ./build -name "*.app" -type d 2>/dev/null
+          find ./build -name "Laileme" -type f 2>/dev/null | head -5
+
+      - name: Package build artifacts
+        if: success()
         run: |
-          echo "=== Compiling Swift files for iOS ==="
-          SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
-          echo "iOS Simulator SDK: $SDK_PATH"
-
-          SWIFT_FILES=$(find Laileme -name "*.swift" | sort)
-          echo "Found Swift files:"
-          echo "$SWIFT_FILES"
-          echo "---"
-
-          swiftc \
-            -sdk "$SDK_PATH" \
-            -target arm64-apple-ios17.0-simulator \
-            -parse \
-            $SWIFT_FILES 2>&1
-
-          if [ $? -eq 0 ]; then
-            echo "=== All Swift files parsed successfully! ==="
+          APP_PATH=$(find ./build -name "*.app" -type d | head -1)
+          if [ -n "$APP_PATH" ]; then
+            echo "Found app: $APP_PATH"
+            mkdir -p artifacts
+            cp -R "$APP_PATH" artifacts/
+            cd artifacts && zip -r ../Laileme-Simulator.zip . && cd ..
+            ls -lh Laileme-Simulator.zip
           else
-            echo "=== Parse errors found ==="
-            exit 1
+            echo "No .app found, packaging build dir..."
+            PROD_PATH=$(find ./build -path "*/Debug-iphonesimulator/*" -type d | head -1)
+            if [ -n "$PROD_PATH" ]; then
+              mkdir -p artifacts
+              cp -R "$PROD_PATH"/* artifacts/ 2>/dev/null || true
+              cd artifacts && zip -r ../Laileme-Build.zip . && cd ..
+              ls -lh Laileme-Build.zip
+            else
+              echo "No build products found"
+              find ./build -type f -name "Laileme*" | head -10
+            fi
           fi
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Laileme-iOS-Build
+          path: |
+            Laileme-Simulator.zip
+            Laileme-Build.zip
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Build summary
+        if: always()
+        run: |
+          echo "=== Build Summary ==="
+          echo "Status: ${{ job.status }}"
+          echo "Build products:"
+          find ./build -name "*.app" -type d 2>/dev/null || echo "No .app found"
+          du -sh ./build 2>/dev/null || true
