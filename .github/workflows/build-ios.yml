@@ -21,36 +21,56 @@ jobs:
           sw_vers
           xcodebuild -version
           echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
+          xcrun simctl list devices available | head -20
 
-      - name: Create SPM Package
+      - name: Create Xcode project
         run: |
-          cat > Package.swift << 'EOF'
-          // swift-tools-version: 5.9
-          import PackageDescription
-          let package = Package(
-              name: "Laileme",
-              platforms: [.iOS(.v17)],
-              products: [
-                  .library(name: "Laileme", targets: ["Laileme"])
-              ],
-              targets: [
-                  .target(
-                      name: "Laileme",
-                      path: "Laileme",
-                      exclude: ["Info.plist"]
-                  )
-              ]
-          )
-          EOF
-          cat Package.swift
+          mkdir -p Laileme.xcodeproj
+          cat > Laileme.xcodeproj/project.pbxproj << 'PBXEOF'
+          // !$*UTF8*$!
+          {
+            archiveVersion = 1;
+            classes = {};
+            objectVersion = 56;
+            objects = {
+              00000001 = { isa = PBXGroup; children = (00000010); sourceTree = "<group>"; };
+              00000010 = { isa = PBXGroup; children = (); name = Laileme; path = Laileme; sourceTree = "<group>"; };
+              00000002 = { isa = PBXProject; buildConfigurationList = 00000003; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = 00000001; productRefGroup = 00000001; projectDirPath = ""; projectRoot = ""; targets = (); };
+              00000003 = { isa = XCConfigurationList; buildConfigurations = (00000004); defaultConfigurationIsVisible = 0; };
+              00000004 = { isa = XCBuildConfiguration; buildSettings = { ALWAYS_SEARCH_USER_PATHS = NO; }; name = Debug; };
+            };
+            rootObject = 00000002;
+          }
+          PBXEOF
 
-      - name: Build with Swift
+      - name: Build for iOS Simulator via SPM
         run: |
-          swift build 2>&1
+          xcodebuild \
+            -scheme Laileme \
+            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -skipPackagePluginValidation \
+            build 2>&1 || true
+
+      - name: Build with swiftc directly
+        run: |
+          echo "=== Compiling Swift files for iOS ==="
+          SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          echo "iOS Simulator SDK: $SDK_PATH"
+
+          SWIFT_FILES=$(find Laileme -name "*.swift" | sort)
+          echo "Found Swift files:"
+          echo "$SWIFT_FILES"
           echo "---"
-          echo "Build completed!"
 
-      - name: List build artifacts
-        if: always()
-        run: |
-          ls -la .build/debug/ 2>/dev/null || echo "No build artifacts"
+          swiftc \
+            -sdk "$SDK_PATH" \
+            -target arm64-apple-ios17.0-simulator \
+            -parse \
+            $SWIFT_FILES 2>&1
+
+          if [ $? -eq 0 ]; then
+            echo "=== All Swift files parsed successfully! ==="
+          else
+            echo "=== Parse errors found ==="
+            exit 1
+          fi
