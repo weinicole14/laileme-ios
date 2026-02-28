@@ -1,0 +1,56 @@
+name: Build iOS App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Laileme/**'
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show environment
+        run: |
+          sw_vers
+          xcodebuild -version
+          echo "CPU: $(sysctl -n machdep.cpu.brand_string)"
+
+      - name: Create SPM Package
+        run: |
+          cat > Package.swift << 'EOF'
+          // swift-tools-version: 5.9
+          import PackageDescription
+          let package = Package(
+              name: "Laileme",
+              platforms: [.iOS(.v17)],
+              products: [
+                  .library(name: "Laileme", targets: ["Laileme"])
+              ],
+              targets: [
+                  .target(
+                      name: "Laileme",
+                      path: "Laileme",
+                      exclude: ["Info.plist"]
+                  )
+              ]
+          )
+          EOF
+          cat Package.swift
+
+      - name: Build with Swift
+        run: |
+          swift build 2>&1
+          echo "---"
+          echo "Build completed!"
+
+      - name: List build artifacts
+        if: always()
+        run: |
+          ls -la .build/debug/ 2>/dev/null || echo "No build artifacts"
